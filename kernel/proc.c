@@ -415,6 +415,7 @@ wait(uint64 addr)
             return -1;
           }
           freeproc(np);
+          
           release(&np->lock);
           release(&p->lock);
           return pid;

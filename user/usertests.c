@@ -1754,11 +1754,13 @@ sbrkfail(char *s)
   if(pid == 0){
     // allocate a lot of memory
     a = sbrk(0);
+    printf("child sbrk(%d)\n", 10*BIG);
     sbrk(10*BIG);
     int n = 0;
     for (i = 0; i < 10*BIG; i += PGSIZE) {
       n += *(a+i);
     }
+    printf("child access done\n");
     printf("%s: allocate a lot of memory succeeded %d\n", n);
     exit(1);
   }
@@ -1782,6 +1784,7 @@ sbrkarg(char *s)
     printf("%s: open sbrk failed\n", s);
     exit(1);
   }
+  printf("sbrkarg write %p\n", a);
   if ((n = write(fd, a, PGSIZE)) < 0) {
     printf("%s: write sbrk failed\n", s);
     exit(1);

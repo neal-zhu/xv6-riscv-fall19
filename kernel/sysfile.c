@@ -75,6 +75,15 @@ sys_read(void)
 
   if(argfd(0, 0, &f) < 0 || argint(2, &n) < 0 || argaddr(1, &p) < 0)
     return -1;
+  
+  struct proc *proc = myproc();
+  if (p > proc->sz) return -1;
+  uint64 pa = walkaddr(proc->pagetable, p);
+  if (pa == 0) {
+    char *mem = kalloc();
+    mappages(proc->pagetable, PGROUNDDOWN(p), PGSIZE, (uint64)mem, PTE_W|PTE_X|PTE_R|PTE_U);
+  }
+
   return fileread(f, p, n);
 }
 
@@ -87,6 +96,13 @@ sys_write(void)
 
   if(argfd(0, 0, &f) < 0 || argint(2, &n) < 0 || argaddr(1, &p) < 0)
     return -1;
+  struct proc *proc = myproc();
+  if (p > proc->sz) return -1;
+  uint64 pa = walkaddr(proc->pagetable, p);
+  if (pa == 0) {
+    char *mem = kalloc();
+    mappages(proc->pagetable, PGROUNDDOWN(p), PGSIZE, (uint64)mem, PTE_W|PTE_X|PTE_R|PTE_U);
+  }
 
   return filewrite(f, p, n);
 }
@@ -459,9 +475,16 @@ sys_pipe(void)
   struct file *rf, *wf;
   int fd0, fd1;
   struct proc *p = myproc();
-
   if(argaddr(0, &fdarray) < 0)
     return -1;
+  if (fdarray > p->sz) {
+    return -1;
+  }
+  uint64 pa = walkaddr(p->pagetable, fdarray);
+  if (pa == 0) {
+    char *mem = kalloc();
+    mappages(p->pagetable, PGROUNDDOWN(fdarray), PGSIZE, (uint64)mem, PTE_W|PTE_X|PTE_R|PTE_U);
+  }
   if(pipealloc(&rf, &wf) < 0)
     return -1;
   fd0 = -1;

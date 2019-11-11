@@ -68,11 +68,36 @@ usertrap(void)
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
-    printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
-    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
-    p->killed = 1;
+    if (r_scause() == 13 || r_scause() == 15) {
+        uint64 va = r_stval();
+        if (va >= p->sz) {
+          p->killed = 1;
+          goto out;
+        } 
+        va = PGROUNDDOWN(va);
+        pte_t *pte = walk(p->pagetable, va, 0);
+        if (*pte != 0 && (*pte & PTE_U) == 0) {
+          p->killed = 1;
+          goto out;
+        }
+        char *mem = (char*)kalloc();
+        if (mem == 0) {
+          p->killed = 1;
+          goto out;
+        } 
+        memset(mem, 0, PGSIZE);
+        if (mappages(p->pagetable, PGROUNDDOWN(va), PGSIZE, (uint64)mem, PTE_W|PTE_X|PTE_R|PTE_U) != 0) {
+          printf("mappages error\n");
+          p->killed = 1;
+        }
+    } else {
+        printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+        printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+        p->killed = 1;
+    } 
   }
 
+out:
   if(p->killed)
     exit(-1);
 
@@ -130,6 +155,7 @@ usertrapret(void)
 // interrupts and exceptions from kernel code go here via kernelvec,
 // on whatever the current kernel stack is.
 // must be 4-byte aligned to fit in stvec.
+//
 void 
 kerneltrap()
 {
@@ -206,7 +232,7 @@ devintr()
     w_sip(r_sip() & ~2);
 
     return 2;
-  } else {
+  }  else {
     return 0;
   }
 }

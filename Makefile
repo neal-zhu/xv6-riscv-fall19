@@ -121,6 +121,7 @@ mkfs/mkfs: mkfs/mkfs.c $K/fs.h
 
 UPROGS=\
 	$U/_lazytests\
+	$U/_memtest\
 	$U/_cat\
 	$U/_echo\
 	$U/_forktest\
