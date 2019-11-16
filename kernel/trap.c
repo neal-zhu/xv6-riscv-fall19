@@ -49,8 +49,10 @@ usertrap(void)
   
   // save user program counter.
   p->tf->epc = r_sepc();
+
+  uint64 scause = r_scause();
   
-  if(r_scause() == 8){
+  if(scause == 8){
     // system call
 
     if(p->killed)
@@ -68,10 +70,21 @@ usertrap(void)
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
-    printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
-    printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
-    p->killed = 1;
+    if (scause != 2 && scause != 15) {
+      printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+      printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+      p->killed = 1;
+      goto done;
+    }
+    uint64 va = r_stval();
+    if (copyifneeded(p->pagetable, va) < 0) {
+      printf("%d(%s) copyifneeded error\n", p->pid, p->name);
+      p->killed = 1;
+      goto done;
+    }
   }
+
+done:
 
   if(p->killed)
     exit(-1);
