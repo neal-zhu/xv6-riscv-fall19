@@ -29,44 +29,9 @@ struct {
   struct spinlock lock;
   struct buf buf[NBUF];
 
-  // Linked list of all buffers, through prev/next.
-  // head.next is most recently used.
-  struct buf head;
-
-  // hashtable to lookup cached buf
-  struct buf      *list[NBUCKETS];
+  struct buf      list[NBUCKETS];
   struct spinlock locks[NBUCKETS];
-  int nelems;
 } bcache;
-
-struct buf **find_ptr(uint dev, uint blockno) {
-  uint i = blockno % NBUCKETS;
-  struct buf **p = &bcache.list[i];
-  while (*p != 0 &&
-          ((*p)->blockno != blockno || (*p)->dev != dev))
-    p = &(*p)->next_hash;
-  return p;
-}
-
-void btable_insert(struct buf *buf) {
-  struct buf **p = find_ptr(buf->dev, buf->blockno);
-  *p = buf;
-  buf->next_hash = 0;
-  bcache.nelems++;
-}
-
-void btable_remove(struct buf *buf) {
-  struct buf **p = find_ptr(buf->dev, buf->blockno);
-  if (*p != 0) {
-    *p = (*p)->next_hash;
-    bcache.nelems--;
-  }
-}
-
-struct buf *btable_lookup(uint dev, uint blockno) {
-  struct buf **p = find_ptr(dev, blockno);
-  return *p;
-}
 
 void
 binit(void)
@@ -74,20 +39,20 @@ binit(void)
   struct buf *b;
 
   initlock(&bcache.lock, "bcache");
-  memset(bcache.list, 0, sizeof(bcache.list));
-  bcache.nelems = 0;
-  for (int i = 0; i < NBUCKETS; i++)
+  for (int i = 0; i < NBUCKETS; i++) {
     initlock(&bcache.locks[i], "bcache.bucket");
+    bcache.list[i].next = &bcache.list[i];
+    bcache.list[i].prev = &bcache.list[i];
+  }
 
-  // Create linked list of buffers
-  bcache.head.prev = &bcache.head;
-  bcache.head.next = &bcache.head;
-  for(b = bcache.buf; b < bcache.buf+NBUF; b++){
-    b->next = bcache.head.next;
-    b->prev = &bcache.head;
+  for (int i = 0; i < NBUF; i++) {
+    int bkt = i % NBUCKETS;
+    b = bcache.buf + i;
+    b->next = bcache.list[bkt].next;
+    b->prev = &bcache.list[bkt];
     initsleeplock(&b->lock, "buffer");
-    bcache.head.next->prev = b;
-    bcache.head.next = b;
+    bcache.list[bkt].next->prev = b;
+    bcache.list[bkt].next = b;
   }
 }
 
@@ -98,30 +63,61 @@ static struct buf*
 bget(uint dev, uint blockno)
 {
   struct buf *b;
+  int bkt = blockno % NBUCKETS;
 
-  acquire(&bcache.locks[blockno%NBUCKETS]);
+  acquire(&bcache.locks[bkt]);
   // Is the block already cached?
-  if ((b = btable_lookup(dev, blockno)) != 0 && b->refcnt != 0) {
-    b->refcnt++;
-    release(&bcache.locks[blockno%NBUCKETS]);
-    acquiresleep(&b->lock);
-    return b;
+  for (b = bcache.list[bkt].next; b != &bcache.list[bkt]; b = b->next) {
+    if (b->dev == dev && b->blockno == blockno) {
+      assert(b->refcnt >= 0);
+      b->refcnt++;
+      release(&bcache.locks[bkt]);
+      acquiresleep(&b->lock);
+      return b;
+    }
   }
 
-  acquire(&bcache.lock);
   // Not cached; recycle an unused buffer.
-  for(b = bcache.head.prev; b != &bcache.head; b = b->prev){
+  for(b = bcache.list[bkt].prev; b != &bcache.list[bkt]; b = b->prev){
     if(b->refcnt == 0) {
       b->dev = dev;
       b->blockno = blockno;
       b->valid = 0;
       b->refcnt = 1;
-      btable_insert(b);
-      release(&bcache.locks[blockno%NBUCKETS]);
-      release(&bcache.lock);
+      release(&bcache.locks[bkt]);
       acquiresleep(&b->lock);
       return b;
     }
+  }
+  release(&bcache.locks[bkt]);
+
+  acquire(&bcache.lock);
+  // Steal a available buf from other bucket
+  for (int i = 0; i < NBUCKETS; i++) {
+    if (i == bkt)
+      continue;
+    acquire(&bcache.locks[i]);
+    for(b = bcache.list[i].prev; b != &bcache.list[i]; b = b->prev) {
+      if(b->refcnt == 0) {
+        // move buf from i to bkt
+        b->next->prev = b->prev;
+        b->prev->next = b->next;
+        b->next = bcache.list[bkt].next;
+        b->prev = &bcache.list[bkt];
+        bcache.list[bkt].next->prev = b;
+        bcache.list[bkt].next = b;
+
+        b->dev = dev;
+        b->blockno = blockno;
+        b->valid = 0;
+        b->refcnt = 1;
+        release(&bcache.lock);
+        release(&bcache.locks[i]);
+        acquiresleep(&b->lock);
+        return b;
+      }
+    }
+    release(&bcache.locks[i]);
   }
   panic("bget: no buffers");
 }
@@ -159,21 +155,19 @@ brelse(struct buf *b)
 
   releasesleep(&b->lock);
 
-  acquire(&bcache.lock);
+  int bkt = b->blockno % NBUCKETS;
+  acquire(&bcache.locks[bkt]);
   b->refcnt--;
   if (b->refcnt == 0) {
     // no one is waiting for it.
     b->next->prev = b->prev;
     b->prev->next = b->next;
-    b->next = bcache.head.next;
-    b->prev = &bcache.head;
-    bcache.head.next->prev = b;
-    bcache.head.next = b;
-    acquire(&bcache.locks[b->blockno%NBUCKETS]);
-    btable_remove(b);
-    release(&bcache.locks[b->blockno%NBUCKETS]);
+    b->next = bcache.list[bkt].next;
+    b->prev = &bcache.list[bkt];
+    bcache.list[bkt].next->prev = b;
+    bcache.list[bkt].next = b;
   }
-  release(&bcache.lock);
+  release(&bcache.locks[bkt]);
 }
 
 void

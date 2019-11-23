@@ -206,3 +206,8 @@ void lst_push(struct list*, void *);
 void *lst_pop(struct list*);
 void lst_print(struct list*);
 int lst_empty(struct list*);
+
+#define assert(e)  \
+    ((void) ((e) ? ((void)0) : __assert (#e, __FILE__, __LINE__)))
+#define __assert(e, file, line) \
+    ((void)printf ("%s:%d: failed assertion `%s'\n", file, line, e), panic(#e))
