@@ -19,7 +19,6 @@ struct run {
 
 struct {
   struct spinlock locks[NCPU];
-  struct spinlock lock;
   struct run      *freelists[NCPU];
   int             nfree[NCPU];
 } kmem;
@@ -28,7 +27,6 @@ void kinit() {
   for (int i = 0; i < NCPU; i++) {
     initlock(&kmem.locks[i], "kmem.cpu");
   }
-  initlock(&kmem.lock, "kmem");
   memset(kmem.freelists, 0, sizeof(kmem.freelists));
   memset(kmem.nfree, 0, sizeof(kmem.nfree));
   freerange(end, (void *)PHYSTOP);
@@ -82,14 +80,17 @@ void *kalloc(void) {
     r = kmem.freelists[cid];
     kmem.freelists[cid] = r->next;
     kmem.nfree[cid]--;
-    release(&kmem.locks[cid]);
   } else {
-    release(&kmem.locks[cid]);
-    acquire(&kmem.lock);
     for (int i = 0; i < NCPU; i++) {
       if (i == cid)
         continue;
-      acquire(&kmem.locks[i]);
+      if (i < cid) {
+        acquire(&kmem.locks[i]);
+      } else {
+        release(&kmem.locks[cid]);
+        acquire(&kmem.locks[i]);
+        acquire(&kmem.locks[cid]);
+      }
 
       if (kmem.nfree[i] != 0) {
         int steal = kmem.nfree[i] / 2;
@@ -114,8 +115,8 @@ void *kalloc(void) {
       }
       release(&kmem.locks[i]);
     }
-    release(&kmem.lock);
   }
+  release(&kmem.locks[cid]);
 
   pop_off();
   if (r) {
