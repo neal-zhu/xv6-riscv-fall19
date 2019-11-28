@@ -121,6 +121,7 @@ mkfs/mkfs: mkfs/mkfs.c $K/fs.h
 
 UPROGS=\
 	$U/_cat\
+	$U/_symlinktest\
 	$U/_echo\
 	$U/_forktest\
 	$U/_grep\

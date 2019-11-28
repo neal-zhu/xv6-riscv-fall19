@@ -283,6 +283,22 @@ create(char *path, short type, short major, short minor)
   return ip;
 }
 
+static struct inode* 
+resolve(struct inode *ip, int depth) {
+  if (ip->type != T_SYMLINK)
+    return ip;
+  if (depth > 10)
+    return 0;
+  char dst[MAXPATH];
+  readi(ip, 0, (uint64)dst, 0, MAXPATH);
+  iunlock(ip);
+  if ((ip = namei(dst)) == 0) {
+    return 0;
+  }
+  ilock(ip);
+  return resolve(ip, depth+1);
+}
+
 uint64
 sys_open(void)
 {
@@ -314,6 +330,13 @@ sys_open(void)
       end_op(ROOTDEV);
       return -1;
     }
+    if (ip->type == T_SYMLINK && !(omode & O_NOFOLLOW)) {
+      ip = resolve(ip, 1);
+      if (ip == 0) {
+        end_op(ROOTDEV);
+        return -1;
+      }
+    }
   }
 
   if(ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)){
@@ -337,6 +360,7 @@ sys_open(void)
   } else {
     f->type = FD_INODE;
   }
+
   f->ip = ip;
   f->off = 0;
   f->readable = !(omode & O_WRONLY);
@@ -347,6 +371,7 @@ sys_open(void)
 
   return fd;
 }
+
 
 uint64
 sys_mkdir(void)
@@ -483,3 +508,30 @@ sys_pipe(void)
   return 0;
 }
 
+uint64
+sys_symlink() {
+  char new[MAXPATH], old[MAXPATH];
+  struct inode *ip;
+
+  if(argstr(0, old, MAXPATH) < 0 || argstr(1, new, MAXPATH) < 0)
+    return -1;
+
+  begin_op(ROOTDEV);
+
+  if ((ip = create(new, T_SYMLINK, 0, 0)) == 0) {
+    goto bad;
+  }
+
+  if (writei(ip, 0, (uint64)old, 0, MAXPATH) != MAXPATH) {
+    iunlock(ip);
+    goto bad;
+  }
+  iunlockput(ip);
+
+  end_op(ROOTDEV);
+  return 0;
+
+bad:
+  end_op(ROOTDEV);
+  return -1;
+}

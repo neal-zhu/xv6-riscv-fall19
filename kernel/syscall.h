@@ -22,4 +22,5 @@
 #define SYS_close  21
 
 // System calls for labs
-#define SYS_ntas   22
+#define SYS_ntas    22
+#define SYS_symlink 23
