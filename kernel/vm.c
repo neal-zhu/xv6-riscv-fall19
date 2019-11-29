@@ -1,10 +1,15 @@
 #include "param.h"
+#include "fcntl.h"
 #include "types.h"
 #include "memlayout.h"
 #include "elf.h"
 #include "riscv.h"
 #include "defs.h"
+#include "spinlock.h"
+#include "sleeplock.h"
 #include "fs.h"
+#include "file.h"
+#include "proc.h"
 
 /*
  * the kernel's page table.
@@ -190,6 +195,7 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 size, int do_free)
     if((pte = walk(pagetable, a, 0)) == 0)
       panic("uvmunmap: walk");
     if((*pte & PTE_V) == 0){
+      goto next;
       printf("va=%p pte=%p\n", a, *pte);
       panic("uvmunmap: not mapped");
     }
@@ -199,6 +205,7 @@ uvmunmap(pagetable_t pagetable, uint64 va, uint64 size, int do_free)
       pa = PTE2PA(*pte);
       kfree((void*)pa);
     }
+next:
     *pte = 0;
     if(a == last)
       break;
@@ -328,7 +335,8 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
     if((pte = walk(old, i, 0)) == 0)
       panic("uvmcopy: pte should exist");
     if((*pte & PTE_V) == 0)
-      panic("uvmcopy: page not present");
+      //panic("uvmcopy: page not present");
+      continue;
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
     if((mem = kalloc()) == 0)
@@ -450,4 +458,64 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
   } else {
     return -1;
   }
+}
+
+int do_munmap(struct proc *proc, uint64 p, int len) {
+  struct vma *vma;
+
+  if ((vma = find_vma(proc, p)) == 0) {
+    return -1;
+  }
+
+  if (vma->va + vma->len < p + len) {
+    return -1;
+  }
+
+  if (p + len < vma->va + vma->len) {
+    vma->va = p > vma->va ? vma->va : vma->va + len;
+    vma->len -= len;
+  } else {
+    vma->va = 0;
+    vma->len = 0;
+  }
+
+  struct file *f = vma->f;
+  if (vma->flags == MAP_SHARED && (vma->prot & PROT_WRITE)) {
+    for (; len > 0; len -= PGSIZE) {
+      pte_t *pte = walk(proc->pagetable, p, 0);
+      if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0 || (*pte & PTE_D) == 0) {
+          
+      } else {
+        uint64 addr = PTE2PA(*pte);
+        int i = 0, n = PGSIZE, r;
+        int max = ((MAXOPBLOCKS-1-1-2) / 2) * BSIZE;
+        while(i < n){
+          int n1 = n - i;
+          if(n1 > max)
+            n1 = max;
+
+          begin_op(f->ip->dev);
+          ilock(f->ip);
+          if ((r = writei(f->ip, 0, addr + i, f->off, n1)) > 0)
+            f->off += r;
+          iunlock(f->ip);
+          end_op(f->ip->dev);
+
+          if(r < 0)
+            break;
+          if(r != n1)
+            panic("short filewrite");
+          i += r;
+        }
+        if (i != n) {
+          return -1;
+        }
+        uvmunmap(proc->pagetable, p, PGSIZE, 1);
+      }
+      p += PGSIZE;
+    }
+  }
+  if (vma->va == 0)
+    fileclose(vma->f);
+  return 0;
 }

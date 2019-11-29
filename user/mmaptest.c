@@ -175,10 +175,8 @@ mmap_test(void)
     err("close");
 
   // unmap the rest of the mapped memory.
-  printf("unmap the rest of the mapped memory\n");
   if (munmap(p+PGSIZE*2, PGSIZE) == -1)
     err("munmap (4)");
-  printf("unmap the rest of the mapped memory done\n");
 
   //
   // mmap two files at the same time.

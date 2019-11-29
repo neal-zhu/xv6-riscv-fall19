@@ -261,6 +261,13 @@ fork(void)
     release(&np->lock);
     return -1;
   }
+
+  for (int i = 0; i < 10; i++) {
+    if (p->vma[i].va == 0)
+      continue;
+    filedup(p->vma[i].f);
+    np->vma[i] = p->vma[i];
+  }
   np->sz = p->sz;
 
   np->parent = p;
@@ -332,6 +339,11 @@ exit(int status)
       fileclose(f);
       p->ofile[fd] = 0;
     }
+  }
+  for (int i = 0; i < 10; i++) {
+    if (p->vma[i].va != 0) {
+      do_munmap(p, p->vma[i].va, p->vma[i].len);
+    }   
   }
 
   begin_op(ROOTDEV);

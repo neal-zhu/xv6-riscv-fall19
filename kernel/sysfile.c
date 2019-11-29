@@ -494,7 +494,6 @@ uint64 sys_mmap(void) {
 uint64 sys_munmap(void) {
   uint64 p;
   int len;
-  struct vma *vma;
   struct proc *proc;
 
   if (argaddr(0, &p) < 0 || argint(1, &len) < 0) {
@@ -502,58 +501,6 @@ uint64 sys_munmap(void) {
   }
 
   proc = myproc();
-  if ((vma = find_vma(proc, p)) == 0) {
-    return -1;
-  }
 
-  if (vma->va + vma->len < p + len) {
-    return -1;
-  }
-
-  if (p + len < vma->va + vma->len) {
-    vma->va = p > vma->va ? vma->va : vma->va + len;
-    vma->len -= len;
-  } else {
-    vma->va = 0;
-    vma->len = 0;
-  }
-
-  struct file *f = vma->f;
-  if (vma->flags == MAP_SHARED && (vma->prot & PROT_WRITE)) {
-    for (; len > 0; len -= PGSIZE) {
-      pte_t *pte = walk(proc->pagetable, p, 0);
-      if(pte == 0 || (*pte & PTE_V) == 0 || (*pte & PTE_U) == 0 || (*pte & PTE_D) == 0) {
-          
-      } else {
-        uint64 addr = PTE2PA(*pte);
-        int i = 0, n = PGSIZE, r;
-        int max = ((MAXOPBLOCKS-1-1-2) / 2) * BSIZE;
-        while(i < n){
-          int n1 = n - i;
-          if(n1 > max)
-            n1 = max;
-
-          begin_op(f->ip->dev);
-          ilock(f->ip);
-          if ((r = writei(f->ip, 0, addr + i, f->off, n1)) > 0)
-            f->off += r;
-          iunlock(f->ip);
-          end_op(f->ip->dev);
-
-          if(r < 0)
-            break;
-          if(r != n1)
-            panic("short filewrite");
-          i += r;
-        }
-        if (i != n) {
-          return -1;
-        }
-        uvmunmap(proc->pagetable, p, PGSIZE, 1);
-      }
-      p += PGSIZE;
-    }
-  }
-
-  return 0;
+  return do_munmap(proc, p, len);
 }
