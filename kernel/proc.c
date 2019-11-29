@@ -690,3 +690,16 @@ procdump(void)
     printf("\n");
   }
 }
+
+struct vma*
+find_vma(struct proc *p, uint64 va) {
+  struct vma *vma;
+  for (int i = 0; i < 10; i++) {
+    vma = &p->vma[i];
+    if (vma->va <= va && vma->va + vma->len > va) {
+      break;
+    }
+    vma = 0;
+  }
+  return vma;
+}

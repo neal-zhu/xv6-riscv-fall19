@@ -27,6 +27,8 @@ int ntas();
 int crash(const char*, int);
 int mount(char*, char *);
 int umount(char*);
+void *mmap(void *addr, uint len, int prot, int flags, int fd, uint offset);
+int munmap(void *addr, uint len);
 
 // ulib.c
 int stat(const char*, struct stat*);
