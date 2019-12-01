@@ -80,23 +80,89 @@ bad:
   return -1;
 }
 
-//
-// Your code here.
-//
-// Add and wire in methods to handle closing, reading,
-// and writing for network sockets.
-//
+int
+sockread(struct sock *s, uint64 addr, int n) {
+  struct proc *pr = myproc();
+  acquire(&s->lock);
+  while (mbufq_empty(&s->rxq)) {
+    if (pr->killed) {
+      release(&s->lock);
+      return -1;
+    }
+    sleep(s, &s->lock);
+  }
+  
+  struct mbuf *m;
+  m = mbufq_pophead(&s->rxq);
+  int j = m->len;
+  if (j > n)
+    panic("smallbuf");
+  if (copyout(pr->pagetable, addr, m->head, j) == -1) {
+    release(&s->lock);
+    return -1;
+  }
+  release(&s->lock);
+  mbuffree(m);
+  return j;
+}
+
+int
+sockwrite(struct sock *s, uint64 addr, int n) {
+  struct mbuf *m;
+  m = mbufalloc(MBUF_DEFAULT_HEADROOM);
+  struct proc *proc = myproc();
+  if (copyin(proc->pagetable, m->head, addr, n) == -1) {
+    panic("sockwrite");
+    return -1;
+  }
+  mbufput(m, n);
+  net_tx_udp(m, s->raddr, s->lport, s->rport);
+  return n;
+}
+
+void 
+sockclose(struct sock *s) {
+  acquire(&lock);
+  struct sock **l = &sockets;
+  while (*l) {
+    if ((*l)->lport == s->lport && (*l)->rport == s->rport && (*l)->raddr == s->raddr) {
+      *l = s->next;
+      break;
+    } else {
+      l = &(*l)->next;
+    }
+  }
+  release(&lock);
+  acquire(&s->lock);
+  while (!mbufq_empty(&s->rxq)) {
+    mbuffree(mbufq_pophead(&s->rxq));
+  }
+  release(&s->lock);
+  kfree((char*)s);
+}
 
 // called by protocol handler layer to deliver UDP packets
 void
 sockrecvudp(struct mbuf *m, uint32 raddr, uint16 lport, uint16 rport)
 {
-  //
-  // Your code here.
-  //
-  // Find the socket that handles this mbuf and deliver it, waking
-  // any sleeping reader. Free the mbuf if there are no sockets
-  // registered to handle it.
-  //
-  mbuffree(m);
+  acquire(&lock);
+  struct sock *pos;
+  pos = sockets;
+  while (pos) {
+    if (pos->raddr == raddr &&
+        pos->lport == lport &&
+	pos->rport == rport) {
+      break;
+    }
+    pos = pos->next;
+  }
+  release(&lock);
+  if (pos) {
+    acquire(&pos->lock);
+    mbufq_pushtail(&pos->rxq, m);
+    wakeup(pos);
+    release(&pos->lock);
+  } else {
+    mbuffree(m);
+  }
 }

@@ -369,6 +369,7 @@ void net_rx(struct mbuf *m)
     net_rx_ip(m);
   else if (type == ETHTYPE_ARP)
     net_rx_arp(m);
-  else
+  else {
     mbuffree(m);
+  }
 }

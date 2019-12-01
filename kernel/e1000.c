@@ -90,30 +90,99 @@ e1000_init(uint32 *xregs)
   regs[E1000_RDTR] = 0; // interrupt after every received packet (no timer)
   regs[E1000_RADV] = 0; // interrupt after every packet (no timer)
   regs[E1000_IMS] = (1 << 7); // RXDW -- Receiver Descriptor Write Back
+  __sync_synchronize();
+}
+
+static void
+mprint(const char *s, struct mbuf *m) {
+  return;
+  struct eth *eh = mbufpullhdr(m, *eh);
+  uint16 type = htons(eh->type);
+  const char *stype;
+  if (type == ETHTYPE_IP) {
+    stype = "UDP";
+  } else if (type == ETHTYPE_ARP) {
+    stype = "ARP";
+  } else {
+    stype = "unknow";
+  }
+  printf("%s mbuf(%p) ethtype %s len %d",s, m, stype, m->len);
+  memmove(mbufpush(m, sizeof(*eh)), eh, sizeof(*eh));
+  if (type == ETHTYPE_IP) {
+    printf(" upd(%s)\n", m->head+(sizeof(struct eth) + sizeof(struct ip) + sizeof(struct udp)));
+  } else if (type == ETHTYPE_ARP) {
+    struct arp *arp = (struct arp *)(m->head + sizeof(struct eth));
+    printf(" arp(sip:%d.%d.%d.%d tip: %d.%d.%d.%d)\n", arp->sip&0xff,(arp->sip>>8)&0xff,(arp->sip>>16)&0xff,(arp->sip>>24)&0xff, 
+            arp->tip&0xff,(arp->tip>>8)&0xff,(arp->tip>>16)&0xff,(arp->tip>>24)&0xff);
+  } else {
+    printf(" unknown(%p)\n", type);
+  }
 }
 
 int
 e1000_transmit(struct mbuf *m)
 {
-  //
-  // Your code here.
-  //
-  // the mbuf contains an ethernet frame; program it into
-  // the TX descriptor ring so that the e1000 sends it. Stash
-  // a pointer so that it can be freed after sending.
-  //
-  return -1;
+  acquire(&e1000_lock);
+  uint32 tdt;
+  struct tx_desc *td;
+  tdt = regs[E1000_TDT];
+  //mprint("e1000_transmit", m);
+  td = &tx_ring[tdt];
+
+  if ((td->status & E1000_TXD_STAT_DD) == 0) {
+    panic("e1000_transmit");
+    release(&e1000_lock);
+    return 1;
+  }
+
+  if (td->addr) {
+    mbuffree(tx_mbufs[tdt]);
+  }
+
+  td->addr = (uint64)m->head;
+  td->length = m->len;
+  td->cmd |= (E1000_TXD_CMD_EOP | E1000_TXD_CMD_RS);
+  td->status &= ~E1000_TXD_STAT_DD;
+  tx_mbufs[tdt] = m;
+  regs[E1000_TDT] = ((tdt+1) % TX_RING_SIZE);
+  release(&e1000_lock);
+  return 0;
 }
 
 static void
 e1000_recv(void)
 {
-  //
-  // Your code here.
-  //
-  // Check for packets that have arrived from the e1000
-  // Create and deliver an mbuf for each packet (using net_rx()).
-  //
+  struct mbuf *bufs[RX_RING_SIZE];
+  int x = 0;
+  acquire(&e1000_lock);
+  uint32 rdt, next;
+  rdt = regs[E1000_RDT];
+  next = (rdt + 1) % RX_RING_SIZE;
+  //rdh = regs[E1000_RDH];
+  //printf("e1000_recv rdh %d rdt %d next %d\n", rdh, rdt, next);
+  for (int i = 0, j = next; i < RX_RING_SIZE; i++) {
+    int idx = j + i;
+    struct rx_desc *rx = &rx_ring[idx];
+    struct mbuf *m = rx_mbufs[idx];
+    if (rx->status & E1000_RXD_STAT_DD && rx->status & E1000_RXD_STAT_EOP) {
+      //printf("e1000_recv %d rx status %d errors %d: ", idx, rx->status, rx->errors);
+      mbufput(m, rx->length);
+      mprint("e1000_recv", rx_mbufs[idx]);
+      rx_mbufs[idx] = mbufalloc(0);
+      if (!rx_mbufs[idx])
+        panic("e1000_recv");
+      rx->status = 0;
+      rx->addr = (uint64)rx_mbufs[idx]->head;
+      regs[E1000_RDT] = idx;
+      bufs[x++] = m;
+    } else {
+      //printf("\n");
+    }
+  }
+  release(&e1000_lock);
+  for (int i = 0; i < x; i++) {
+    net_rx(bufs[i]);
+  }
 }
 
 void

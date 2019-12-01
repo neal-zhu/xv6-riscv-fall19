@@ -71,6 +71,9 @@ void            net_tx_udp(struct mbuf*, uint32, uint16, uint16);
 void            sockinit(void);
 int             sockalloc(struct file **, uint32, uint16, uint16);
 void            sockrecvudp(struct mbuf*, uint32, uint16, uint16);
+int             sockread(struct sock*, uint64, int);
+int             sockwrite(struct sock*, uint64, int);
+void            sockclose(struct sock*);
 
 // ramdisk.c
 void            ramdiskinit(void);
@@ -221,7 +224,7 @@ struct list {
 // list.c
 void lst_init(struct list*);
 void lst_remove(struct list*);
-void lst_push(struct list*, void *);
 void *lst_pop(struct list*);
 void lst_print(struct list*);
 int lst_empty(struct list*);
+void lst_push(struct list*, void*);
